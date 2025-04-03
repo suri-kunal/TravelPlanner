@@ -1,7 +1,7 @@
-from tools.accommodations.apis import Accommodations
-from tools.flights.apis import Flights
-from tools.restaurants.apis import Restaurants
-from tools.googleDistanceMatrix.apis import GoogleDistanceMatrix
+from travelplanner.tools.accommodations.apis import Accommodations
+from travelplanner.tools.flights.apis import Flights
+from travelplanner.tools.restaurants.apis import Restaurants
+from travelplanner.tools.googleDistanceMatrix.apis import GoogleDistanceMatrix
 import pandas as pd
 
 hotel = Accommodations()
@@ -52,7 +52,9 @@ def budget_calc(org, dest, days, date:list , people_number=None, local_constrain
 
 
     elif grain == "state":
-        city_set = open('../database/background/citySet_with_states.txt').read().strip().split('\n')
+        city_set = []
+        with open('./src/travelplanner/database/background/citySet_with_states.txt','r') as f:
+            city_set = f.read().strip().split('\n')
         
         all_hotel_data = []
         all_restaurant_data = []

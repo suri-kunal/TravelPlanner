@@ -7,8 +7,10 @@ class Cities:
         print("Cities loaded.")
 
     def load_data(self):
-        cityStateMapping = open(self.path, "r").read().strip().split("\n")
         self.data = {}
+        cityStateMapping = None
+        with open(self.path, "r") as f:
+            cityStateMapping = f.read().strip().split("\n")
         for unit in cityStateMapping:
             city, state = unit.split("\t")
             if state not in self.data:
