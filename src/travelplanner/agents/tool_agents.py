@@ -17,7 +17,6 @@ import argparse
 from datasets import load_dataset
 import os
 from functools import partial
-from litellm import completion
 import warnings
 warnings.filterwarnings('error')
 
@@ -71,15 +70,20 @@ class ReactAgent:
                  ) -> None:
         
         if "gemini" in react_llm_name.lower():
-            self.react_llm_name_w_router = f"gemini/{react_llm_name}"
-        elif "claude" in react_llm_name.lower():
-            self.react_llm_name_w_router = f"anthropic/{react_llm_name}"
+            self.model_name = react_llm_name
+            self.parameters = {"temperature":1,"max_completion_tokens":4000}
         elif ("gpt" in react_llm_name.lower()) or react_llm_name.lower().startswith("o"):
-            self.react_llm_name_w_router = react_llm_name
+            self.model_name = react_llm_name
+            self.parameters = {"temperature":1,"max_completion_tokens":4000}
         else:
-            raise Exception(f"{react_llm_name} doesn't have appropriate handling technique. Please add one!!!")
+            raise Exception(f"Currently we support Gemini and OpenAI models only.")
+        self.client = openai.OpenAI(
+            # Should be for Gemini or OpenAI. We rely on user to provide correct API - we don't do any checks
+            api_key=os.environ.get("API_KEY"),
+            base_url=os.environ.get("BASE_URL")
+        )
         
-        self.llm = partial(self._get_completion,model_name=self.react_llm_name_w_router,temperature=1,max_tokens=4000)
+        self.llm = partial(self._get_completion,model_name=self.model_name,**self.parameters)
 
         self.answer = ''
         self.max_steps = max_steps
@@ -113,11 +117,17 @@ class ReactAgent:
         self.__reset_agent()
     
     def _get_completion(self,model_name,content,**params):
-        return completion(
-            model = model_name,
-            messages=[{ "content": content,"role": "user"}],
+        completion = self.client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {
+                    "role": "user",
+                    "content": content,
+                },
+            ],
             **params
         )
+        return completion
 
     def run(self, query, reset=True) -> None:
 
@@ -142,7 +152,6 @@ class ReactAgent:
         print(self.scratchpad.split('\n')[-1])
         self.json_log[-1]['thought'] = self.scratchpad.split('\n')[-1].replace(f'\nThought {self.step_n}:',"")
         # self.log_file.write(self.scratchpad.split('\n')[-1] + '\n')
-
 
         # Act
         self.scratchpad += f'\nAction {self.step_n}:'
@@ -589,7 +598,7 @@ if __name__ == '__main__':
     tools_list = ["notebook","flights","attractions","accommodations","restaurants","googleDistanceMatrix","planner","cities"]
     parser = argparse.ArgumentParser()
     parser.add_argument("--set_type", type=str, default="validation")
-    parser.add_argument("--create_subset", type=bool, default=False)
+    parser.add_argument("--create_subset", type=str, default="no")
     parser.add_argument("--result_prefix", type=str, default="generated_plan_")
     parser.add_argument("--model_name", type=str, default="gpt-4o-mini-2024-07-18")
     parser.add_argument("--output_dir", type=str, default="./results")
@@ -605,7 +614,7 @@ if __name__ == '__main__':
         query_data_list  = load_dataset('osunlp/TravelPlanner','test')['test']
     result_prefix = args.result_prefix
 
-    if args.create_subset:
+    if args.create_subset.lower() == "yes":
         # Create a subset of the dataset
         query_data_list = query_data_list.train_test_split(test_size=0.2,shuffle=False,seed=42)["test"]
         result_prefix = f"sample_{args.result_prefix}"

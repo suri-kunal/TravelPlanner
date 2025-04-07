@@ -9,7 +9,6 @@ import openai
 import time
 from enum import Enum
 from typing import List
-from litellm import completion
 
 def catch_openai_api_error():
     error = sys.exc_info()[0]
@@ -39,17 +38,21 @@ class Planner:
                  ) -> None:
         
         if "gemini" in model_name.lower():
-            self.model_name_w_router = f"gemini/{model_name}"
-        elif "claude" in model_name.lower():
-            self.model_name_w_router = f"anthropic/{model_name}"
+            self.model_name = model_name
+            self.parameters = {"temperature":1,"max_completion_tokens":4000}
         elif ("gpt" in model_name.lower()) or model_name.lower().startswith("o"):
-            self.model_name_w_router = model_name
+            self.model_name = model_name
+            self.parameters = {"temperature":1,"max_completion_tokens":4000}
         else:
-            raise Exception(f"{model_name} doesn't have appropriate handling technique. Please add one!!!")
-        self.llm = partial(self._get_completion,model_name=self.model_name_w_router,temperature=1,max_tokens=4000)
+            raise Exception(f"Currently we support Gemini and OpenAI models only.")
+        self.client = openai.OpenAI(
+            # Should be for Gemini or OpenAI. We rely on user to provide correct API - we don't do any checks
+            api_key=os.environ.get("API_KEY"),
+            base_url=os.environ.get("BASE_URL")
+        )
+        self.llm = partial(self._get_completion,model_name=self.model_name,**self.parameters)
         self.agent_prompt = agent_prompt
         self.scratchpad: str = ''
-        self.model_name = model_name
         self.enc = tiktoken.encoding_for_model("gpt-3.5-turbo")
 
         print(f"PlannerAgent {model_name} loaded.")
@@ -61,9 +64,6 @@ class Planner:
             return 'Max Token Length Exceeded.'
         else:
             result = self.llm(content=self._build_agent_prompt(text, query))
-            print("="*20)
-            print(result)
-            print("="*20)
             if len(result.choices) == 0:
                 raise Exception("result has no response")
             if len(result.choices) > 1:
@@ -77,11 +77,17 @@ class Planner:
         )
     
     def _get_completion(self,model_name,content,**params):
-        return completion(
-            model = model_name,
-            messages=[{ "content": content,"role": "user"}],
+        completion = self.client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {
+                    "role": "user",
+                    "content": content,
+                },
+            ],
             **params
         )
+        return completion
 
 class ReactPlanner:
     """
@@ -93,20 +99,26 @@ class ReactPlanner:
                  ) -> None:
         
         if "gemini" in model_name.lower():
-            self.model_name_w_router = f"gemini/{model_name}"
-        elif "claude" in model_name.lower():
-            self.model_name_w_router = f"anthropic/{model_name}"
+            self.model_name = model_name
+            self.parameters = {"temperature":1,"max_completion_tokens":4000,"stop":["Action","Thought","Observation"]}
         elif ("gpt" in model_name.lower()) or model_name.lower().startswith("o"):
-            self.model_name_w_router = model_name
+            self.model_name = model_name
+            self.parameters = {"temperature":1,"max_completion_tokens":4000,"stop":["Action","Thought","Observation"]}
         else:
-            raise Exception(f"{model_name} doesn't have appropriate handling technique. Please add one!!!")
+            raise Exception(f"Currently we support Gemini and OpenAI models only.")
+        self.client = openai.OpenAI(
+            # Should be for Gemini or OpenAI. We rely on user to provide correct API - we don't do any checks
+            api_key=os.environ.get("API_KEY"),
+            base_url=os.environ.get("BASE_URL")
+        )
 
         self.agent_prompt = agent_prompt
         self.react_llm = \
-        partial(self._get_completion, \
-                model_name=self.model_name_w_router, \
-                temperature=1,max_tokens=1024, \
-                stop = ["Action","Thought","Observation"])
+        partial(
+            self._get_completion,
+            model_name=self.model_name,
+            **self.parameters
+        )
         self.env = ReactEnv()
         self.query = None
         self.max_steps = 30
@@ -116,11 +128,17 @@ class ReactPlanner:
         self.enc = tiktoken.encoding_for_model("gpt-3.5-turbo")
     
     def _get_completion(self,model_name,content,**params):
-        return completion(
-            model = model_name,
-            messages=[{ "content": content,"role": "user"}],
+        completion = self.client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {
+                    "role": "user",
+                    "content": content,
+                },
+            ],
             **params
         )
+        return completion
 
     def run(self, text, query, reset = True) -> None:
 
@@ -222,31 +240,32 @@ class ReactReflectPlanner:
     ) -> None:
         
         if "gemini" in model_name.lower():
-            self.model_name_w_router = f"gemini/{model_name}"
-        elif "claude" in model_name.lower():
-            self.model_name_w_router = f"anthropic/{model_name}"
+            self.model_name = model_name
+            self.parameters = {"temperature":1,"max_completion_tokens":4000,"stop":["Action","Thought","Observation"]}
         elif ("gpt" in model_name.lower()) or model_name.lower().startswith("o"):
-            self.model_name_w_router = model_name
+            self.model_name = model_name
+            self.parameters = {"temperature":1,"max_completion_tokens":4000,"stop":["Action","Thought","Observation"]}
         else:
-            raise Exception(f"{model_name} doesn't have appropriate handling technique. Please add one!!!")
+            raise Exception(f"Currently we support Gemini and OpenAI models only.")
+        self.client = openai.OpenAI(
+            # Should be for Gemini or OpenAI. We rely on user to provide correct API - we don't do any checks
+            api_key=os.environ.get("API_KEY"),
+            base_url=os.environ.get("BASE_URL")
+        )
 
         self.agent_prompt = agent_prompt
         self.reflect_prompt = reflect_prompt
         self.react_llm = \
         partial(
             self._get_completion,
-            model_name = self.model_name_w_router,
-            temperature = 1,
-            max_tokens = 4000,
-            stop = ["Action","Thought","Observation"]
+            model_name=self.model_name,
+            **self.parameters
         )
         self.reflect_llm = \
         partial(
             self._get_completion,
-            model_name = self.model_name_w_router,
-            temperature = 1,
-            max_tokens = 4000,
-            stop = ["Action","Thought","Observation"]
+            model_name=self.model_name,
+            **self.parameters
         )
         self.model_name = model_name
         self.env = ReactReflectEnv()
@@ -260,11 +279,17 @@ class ReactReflectPlanner:
         self.enc = tiktoken.encoding_for_model("gpt-3.5-turbo")
     
     def _get_completion(self,model_name,content,**params):
-        return completion(
-            model = model_name,
-            messages=[{ "content": content,"role": "user"}],
+        completion = self.client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {
+                    "role": "user",
+                    "content": content,
+                },
+            ],
             **params
         )
+        return completion
 
     def run(self, text, query, reset = True) -> None:
 

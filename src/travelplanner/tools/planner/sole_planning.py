@@ -51,7 +51,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--set_type", type=str, default="validation")
-    parser.add_argument("--create_subset", type=bool, default=False)
+    parser.add_argument("--create_subset", type=str, default="no")
     parser.add_argument("--result_prefix", type=str, default="generated_plan_")
     parser.add_argument("--model_name", type=str, default="gpt-4o-mini-2024-07-18")
     parser.add_argument("--output_dir", type=str, default="./results")
@@ -67,7 +67,7 @@ if __name__ == "__main__":
         query_data_list  = load_dataset('osunlp/TravelPlanner','test')['test']
     result_prefix = args.result_prefix
 
-    if args.create_subset:
+    if args.create_subset.lower() == "yes":
         # Create a subset of the dataset
         query_data_list = query_data_list.train_test_split(test_size=0.2,shuffle=False,seed=42)["test"]
         result_prefix = f"sample_{args.result_prefix}"
