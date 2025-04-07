@@ -13,13 +13,13 @@ import random
 import argparse
 from datasets import load_dataset
 
-
-flight = Flights()
-accommodations = Accommodations()
-restaurants = Restaurants()
-googleDistanceMatrix = GoogleDistanceMatrix()
-attractions = Attractions()
-
+def import_data():
+    flight = Flights()
+    accommodations = Accommodations()
+    restaurants = Restaurants()
+    googleDistanceMatrix = GoogleDistanceMatrix()
+    attractions = Attractions()
+    return flight, accommodations, restaurants, googleDistanceMatrix, attractions
 
 def load_line_json_data(filename):
     data = []
@@ -35,7 +35,9 @@ def get_city_list(days, deparure_city, destination):
     if days == 3:
         city_list.append(destination)
     else:
-        city_set = open('./src/travelplanner/database/background/citySet_with_states.txt').read().split('\n')
+        city_set = []
+        with open('./src/travelplanner/database/background/citySet_with_states.txt','r') as f:
+            city_set = f.read().split('\n')
         state_city_map = {}
         for unit in city_set:
             city, state = unit.split('\t')
@@ -126,6 +128,9 @@ if __name__ == '__main__':
         # Create a subset of the dataset
         query_data_list = query_data_list.train_test_split(test_size=0.2,shuffle=False,seed=42)["test"]
         result_prefix = f"sample_{args.result_prefix}"
+
+    flight, accommodations, restaurants, googleDistanceMatrix, attractions = \
+    import_data()
 
     for idx, query in enumerate(tqdm(query_data_list)):
         plan_list = [{'finished':[False,set()]}]
@@ -241,10 +246,10 @@ if __name__ == '__main__':
         # write to json file
         if not os.path.exists(os.path.join(f'{args.output_dir}/{args.set_type}')):
             os.makedirs(os.path.join(f'{args.output_dir}/{args.set_type}'))
-        if not os.path.exists(os.path.join(f'{args.output_dir}/{args.set_type}/{result_prefix}{idx+1}.json')):
-            generated_plan = [{}]
-        else:
-            generated_plan = json.load(open(f'{args.output_dir}/{args.set_type}/{result_prefix}{idx+1}.json'))
+        generated_plan = [{}]
+        if os.path.exists(os.path.join(f'{args.output_dir}/{args.set_type}/{result_prefix}{idx+1}.json')):
+            with open(f'{args.output_dir}/{args.set_type}/{result_prefix}{idx+1}.json',"r") as f:
+                generated_plan = json.load(f)
         generated_plan[-1]['greedy_search_plan_success'] = [plan_list[0]['finished'][0],list(plan_list[0]['finished'][1])]
         generated_plan[-1]['greedy_search_plan'] = plan_list[1:]
         # print(generated_plan[-1])

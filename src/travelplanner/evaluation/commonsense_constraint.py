@@ -18,7 +18,9 @@ restaurants = Restaurants()
 googleDistanceMatrix = GoogleDistanceMatrix()
 attractions = Attractions()
 
-city_state_set = open('../database/background/citySet_with_states.txt','r').read().split('\n')
+city_state_set = []
+with open('./src/travelplanner/database/background/citySet_with_states.txt','r') as f:
+    city_state_set = f.read().split('\n')
 city_state_map = {x:y for x,y in [unit.split('\t') for unit in city_state_set]}
 
 

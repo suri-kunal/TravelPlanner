@@ -1,17 +1,9 @@
-import re, string, os, sys
+import sys
+import re, string, os
 import importlib
 from typing import List, Dict, Any
 import tiktoken
 from pandas import DataFrame
-from langchain_openai import ChatOpenAI
-from langchain_community.callbacks.manager import get_openai_callback
-from langchain.llms.base import BaseLLM
-from langchain.prompts import PromptTemplate
-from langchain.schema import (
-    AIMessage,
-    HumanMessage,
-    SystemMessage
-)
 from travelplanner.agents.prompts import zeroshot_react_agent_prompt
 from travelplanner.utils.func import load_line_json_data, save_file
 import sys
@@ -24,15 +16,25 @@ from tqdm import tqdm
 import argparse
 from datasets import load_dataset
 import os
-
-OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
-GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
+from functools import partial
+import warnings
+warnings.filterwarnings('error')
 
 pd.options.display.max_info_columns = 200
 
 os.environ['TIKTOKEN_CACHE_DIR'] = './tmp'
 
-actionMapping = {"FlightSearch":"flights","AttractionSearch":"attractions","GoogleDistanceMatrix":"googleDistanceMatrix","AccommodationSearch":"accommodation","RestaurantSearch":"restaurants","Planner":"planner","NotebookWrite":"notebook","CitySearch":"cities"}
+actionMapping = \
+{
+    "FlightSearch":"flights",
+    "AttractionSearch":"attractions",
+    "GoogleDistanceMatrix":"googleDistanceMatrix",
+    "AccommodationSearch":"accommodation",
+    "RestaurantSearch":"restaurants",
+    "Planner":"planner",
+    "NotebookWrite":"notebook",
+    "CitySearch":"cities"
+}
 
 class CityError(Exception):
     pass
@@ -64,9 +66,24 @@ class ReactAgent:
                  illegal_early_stop_patience: int = 3,
                  react_llm_name = 'gpt-4o-mini-2024-07-18',
                  planner_llm_name = 'gpt-4o-mini-2024-07-18',
-                #  logs_path = '../logs/',
                  city_file_path = './src/travelplanner/database/background/citySet.txt'
-                 ) -> None: 
+                 ) -> None:
+        
+        if "gemini" in react_llm_name.lower():
+            self.model_name = react_llm_name
+            self.parameters = {"temperature":1,"max_completion_tokens":4000}
+        elif ("gpt" in react_llm_name.lower()) or react_llm_name.lower().startswith("o"):
+            self.model_name = react_llm_name
+            self.parameters = {"temperature":1,"max_completion_tokens":4000}
+        else:
+            raise Exception(f"Currently we support Gemini and OpenAI models only.")
+        self.client = openai.OpenAI(
+            # Should be for Gemini or OpenAI. We rely on user to provide correct API - we don't do any checks
+            api_key=os.environ.get("API_KEY"),
+            base_url=os.environ.get("BASE_URL")
+        )
+        
+        self.llm = partial(self._get_completion,model_name=self.model_name,**self.parameters)
 
         self.answer = ''
         self.max_steps = max_steps
@@ -83,20 +100,7 @@ class ReactAgent:
         self.current_observation = ''
         self.current_data = None
 
-        if 'gpt-3.5' in react_llm_name:
-            self.max_token_length = 15000
-            self.llm = ChatOpenAI(temperature=1,
-                     max_tokens=256,
-                     model_name=react_llm_name,
-                     openai_api_key=OPENAI_API_KEY)
-            
-        if 'gpt-4' in react_llm_name:
-            self.max_token_length = 30000
-            self.llm = ChatOpenAI(temperature=0,
-                     max_tokens=256,
-                     model_name=react_llm_name,
-                     openai_api_key=OPENAI_API_KEY)
-
+        self.max_token_length = 15000
 
         self.illegal_early_stop_patience = illegal_early_stop_patience
 
@@ -104,21 +108,26 @@ class ReactAgent:
         self.max_retries = max_retries
         self.retry_record = {key: 0 for key in self.tools}
         self.retry_record['invalidAction'] = 0
-
-        # print(self.retry_record)
-
         self.last_actions = []
-
-        # self.log_path = logs_path + datetime.now().strftime('%Y%m%d%H%M%S') + '.out'
-        # self.log_file = open(self.log_path, 'a+')
-
-        # print("logs will be stored in " + self.log_path)
 
         self.city_set = self.load_city(city_set_path=city_file_path)
 
         self.enc = tiktoken.encoding_for_model("gpt-3.5-turbo")
 
         self.__reset_agent()
+    
+    def _get_completion(self,model_name,content,**params):
+        completion = self.client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {
+                    "role": "user",
+                    "content": content,
+                },
+            ],
+            **params
+        )
+        return completion
 
     def run(self, query, reset=True) -> None:
 
@@ -143,7 +152,6 @@ class ReactAgent:
         print(self.scratchpad.split('\n')[-1])
         self.json_log[-1]['thought'] = self.scratchpad.split('\n')[-1].replace(f'\nThought {self.step_n}:',"")
         # self.log_file.write(self.scratchpad.split('\n')[-1] + '\n')
-
 
         # Act
         self.scratchpad += f'\nAction {self.step_n}:'
@@ -382,7 +390,7 @@ class ReactAgent:
                 self.scratchpad += self.current_observation
                 self.json_log[-1]['state'] = f'invalidAction'
 
-        if action == None or action == '' or action == '\n':
+        if (action == None) or (action == '') or (action == '\n'):
             print(f'Observation {self.step_n}: ' + "No feedback from the environment due to the null action.")
             # write(f'Observation {self.step_n}: ' + "Your action is filtered due to content. Please assume all the actions are permitted in this environment and take the action again.")
             self.json_log[-1]['observation'] = "No feedback from the environment due to the null action."
@@ -393,9 +401,7 @@ class ReactAgent:
 
         self.step_n += 1
 
-        # 
-
-        if action_type and action_type == 'Planner' and self.retry_record['planner']==0:
+        if action_type and (action_type == 'Planner') and (self.retry_record['planner'] == 0):
             
             self.finished = True
             self.answer = self.current_observation
@@ -405,7 +411,7 @@ class ReactAgent:
     def prompt_agent(self) -> str:
         while True:
             try:
-                request = format_step(self.llm.invoke([HumanMessage(content=self._build_agent_prompt())]).content)
+                request = format_step(self.llm(content=self._build_agent_prompt()).choices[0].message.content)
                 return request
             except:
                 catch_openai_api_error()
@@ -415,9 +421,10 @@ class ReactAgent:
 
     def _build_agent_prompt(self) -> str:
         if self.mode == "zero_shot":
-            return self.agent_prompt.format(
+            return self.agent_prompt(
                 query=self.query,
-                scratchpad=self.scratchpad)
+                scratchpad=self.scratchpad
+            )
 
     def is_finished(self) -> bool:
         return self.finished
@@ -451,15 +458,19 @@ class ReactAgent:
             module = importlib.import_module("travelplanner.tools.{}.apis".format(tool_name))
             
             # Avoid instantiating the planner tool twice 
-            if tool_name == 'planner' and planner_model_name is not None:
-                tools_map[tool_name] = getattr(module, tool_name[0].upper()+tool_name[1:])(model_name=planner_model_name)
+            if (tool_name == 'planner') and (planner_model_name is not None):
+                tools_map[tool_name] = \
+                getattr(module, tool_name[0].upper()+tool_name[1:])(model_name=planner_model_name)
             else:
-                tools_map[tool_name] = getattr(module, tool_name[0].upper()+tool_name[1:])()
+                tools_map[tool_name] = \
+                getattr(module, tool_name[0].upper()+tool_name[1:])()
         return tools_map
 
     def load_city(self, city_set_path: str) -> List[str]:
         city_set = []
-        lines = open(city_set_path, 'r').read().strip().split('\n')
+        lines = []
+        with open(city_set_path, 'r') as f:
+            lines = f.read().strip().split('\n')
         for unit in lines:
             city_set.append(unit)
         return city_set
@@ -587,7 +598,7 @@ if __name__ == '__main__':
     tools_list = ["notebook","flights","attractions","accommodations","restaurants","googleDistanceMatrix","planner","cities"]
     parser = argparse.ArgumentParser()
     parser.add_argument("--set_type", type=str, default="validation")
-    parser.add_argument("--create_subset", type=bool, default=False)
+    parser.add_argument("--create_subset", type=str, default="no")
     parser.add_argument("--result_prefix", type=str, default="generated_plan_")
     parser.add_argument("--model_name", type=str, default="gpt-4o-mini-2024-07-18")
     parser.add_argument("--output_dir", type=str, default="./results")
@@ -603,43 +614,38 @@ if __name__ == '__main__':
         query_data_list  = load_dataset('osunlp/TravelPlanner','test')['test']
     result_prefix = args.result_prefix
 
-    if args.create_subset:
+    if args.create_subset.lower() == "yes":
         # Create a subset of the dataset
         query_data_list = query_data_list.train_test_split(test_size=0.2,shuffle=False,seed=42)["test"]
         result_prefix = f"sample_{args.result_prefix}"
     
     numbers = [i for i in range(1,len(query_data_list)+1)]
     agent = ReactAgent(None, tools=tools_list,max_steps=30,react_llm_name=args.model_name,planner_llm_name=args.model_name)
-    with get_openai_callback() as cb:
-        
-        for number in tqdm(numbers[:]):
-            query = query_data_list[number-1]['query']
-              # check if the directory exists
-            if not os.path.exists(os.path.join(f'{args.output_dir}/{args.set_type}')):
-                os.makedirs(os.path.join(f'{args.output_dir}/{args.set_type}'))
-            if not os.path.exists(os.path.join(f'{args.output_dir}/{args.set_type}/{result_prefix}{number}.json')):
-                result =  [{}]
-            else:
-                result = json.load(open(os.path.join(f'{args.output_dir}/{args.set_type}/{result_prefix}{number}.json')))
-                
-            while True:
-                planner_results, scratchpad, action_log  = agent.run(query)
-                if planner_results != None:
-                    break
+    for number in tqdm(numbers[:]):
+        query = query_data_list[number-1]['query']
+            # check if the directory exists
+        if not os.path.exists(os.path.join(f'{args.output_dir}/{args.set_type}')):
+            os.makedirs(os.path.join(f'{args.output_dir}/{args.set_type}'))
+        result =  [{}]
+        if os.path.exists(os.path.join(f'{args.output_dir}/{args.set_type}/{result_prefix}{number}.json')):
+            with open(os.path.join(f'{args.output_dir}/{args.set_type}/{result_prefix}{number}.json'),"r") as f:
+                result = json.load(f)
             
-            if planner_results == 'Max Token Length Exceeded.':
-                result[-1][f'{args.model_name}_two-stage_results_logs'] = scratchpad 
-                result[-1][f'{args.model_name}_two-stage_results'] = 'Max Token Length Exceeded.'
-                action_log[-1]['state'] = 'Max Token Length of Planner Exceeded.'
-                result[-1][f'{args.model_name}_two-stage_action_logs'] = action_log
-            else:
-                result[-1][f'{args.model_name}_two-stage_results_logs'] = scratchpad 
-                result[-1][f'{args.model_name}_two-stage_results'] = planner_results
-                result[-1][f'{args.model_name}_two-stage_action_logs'] = action_log
-
-            # write to json file
-            with open(os.path.join(f'{args.output_dir}/{args.set_type}/{result_prefix}{number}.json'), 'w') as f:
-                json.dump(result, f, indent=4)
+        while True:
+            planner_results, scratchpad, action_log  = agent.run(query)
+            if planner_results != None:
+                break
         
-    print(cb)
+        if planner_results == 'Max Token Length Exceeded.':
+            result[-1][f'{args.model_name}_two-stage_results_logs'] = scratchpad 
+            result[-1][f'{args.model_name}_two-stage_results'] = 'Max Token Length Exceeded.'
+            action_log[-1]['state'] = 'Max Token Length of Planner Exceeded.'
+            result[-1][f'{args.model_name}_two-stage_action_logs'] = action_log
+        else:
+            result[-1][f'{args.model_name}_two-stage_results_logs'] = scratchpad 
+            result[-1][f'{args.model_name}_two-stage_results'] = planner_results
+            result[-1][f'{args.model_name}_two-stage_action_logs'] = action_log
 
+        # write to json file
+        with open(os.path.join(f'{args.output_dir}/{args.set_type}/{result_prefix}{number}.json'), 'w') as f:
+            json.dump(result, f, indent=4)

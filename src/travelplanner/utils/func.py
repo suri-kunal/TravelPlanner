@@ -153,7 +153,9 @@ def get_city_list(days, deparure_city, destination):
     if days == 3:
         city_list.append(destination)
     else:
-        city_set = open('../database/background/citySet_with_states.txt').read().split('\n')
+        city_set = []
+        with open('./src/travelplanner/database/background/citySet_with_states.txt','r') as f:
+            city_set = f.read().split('\n')
         state_city_map = {}
         for unit in city_set:
             city, state = unit.split('\t')

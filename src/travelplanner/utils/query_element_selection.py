@@ -9,7 +9,9 @@ import numpy as np
 
 google_distance = GoogleDistanceMatrix()
 
-city_set = open('../database/background/citySet_with_states.txt').read().strip().split('\n')
+city_set = []
+with open('./src/travelplanner/database/background/citySet_with_states.txt','r') as f:
+    city_set = f.read().strip().split('\n')
 
 state_city_map = {}
 
@@ -47,7 +49,9 @@ def select_consecutive_dates(num_days, start_date=datetime(2022, 3, 1), end_date
 
 def get_org_dest(days:int):
     if days == 3:
-        city_set = open('../database/background/citySet_with_states.txt').read().strip().split('\n')
+        city_set = []
+        with open('./src/travelplanner/database/background/citySet_with_states.txt','r') as f:
+            city_set = f.read().strip().split('\n')
 
         org = random.choice(city_set)
 
@@ -60,8 +64,9 @@ def get_org_dest(days:int):
         final_des = dest.split('\t')[0]
 
     elif days in [5,7]:
-    
-        state_set = open('../database/background/citySet_with_states.txt').read().strip().split('\n')
+        state_set = []
+        with open('./src/travelplanner/database/background/citySet_with_states.txt','r') as f:
+            state_set = f.read().strip().split('\n')
         org = random.choice(state_set)
 
         while True:
@@ -231,7 +236,7 @@ if __name__ == "__main__":
     for num, day_list in zip([160,160,160], [[3],[5],[7]]):
         query_list = generate_elements(num,"medium",day_list=day_list)
 
-        with open('../data/query/final_annotation_medium.jsonl', 'a+') as f:
+        with open('final_annotation_medium.jsonl', 'a+') as f:
             for query in query_list:
                 # print(query)
                 json.dump(query, f)

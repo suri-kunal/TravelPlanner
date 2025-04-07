@@ -33,7 +33,9 @@ if __name__ == '__main__':
     submission_list = []
 
     for idx in tqdm(idx_number_list):
-        generated_plan = json.load(open(f'{args.output_dir}/{args.set_type}/{result_prefix}{idx}.json'))
+        generated_plan = dict()
+        with open(f'{args.output_dir}/{args.set_type}/{result_prefix}{idx}.json',"r") as f:
+            generated_plan = json.load(f)
         plan = generated_plan[-1][f'{args.model_name}{suffix}_{args.mode}_parsed_results']
         submission_list.append({"idx":idx,"query":query_data_list[idx-1]['query'],"plan":plan})
     

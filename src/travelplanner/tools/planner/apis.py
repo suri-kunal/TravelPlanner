@@ -1,12 +1,7 @@
+from functools import partial
 import sys
 import os
-from langchain.prompts import PromptTemplate
-from travelplanner.agents.prompts import planner_agent_prompt, cot_planner_agent_prompt, react_planner_agent_prompt,reflect_prompt,react_reflect_planner_agent_prompt, REFLECTION_HEADER
-from langchain_openai import ChatOpenAI
-from langchain.llms.base import BaseLLM
-from langchain.schema import (
-    HumanMessage,
-)
+from travelplanner.agents.prompts import planner_agent_prompt, cot_planner_agent_prompt, react_planner_agent_prompt, reflect_prompt, react_reflect_planner_agent_prompt, REFLECTION_HEADER, PromptTemplateFromScratch
 from travelplanner.tools.planner.env import ReactEnv,ReactReflectEnv
 import tiktoken
 import re
@@ -14,9 +9,6 @@ import openai
 import time
 from enum import Enum
 from typing import List
-import argparse
-
-OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
 
 def catch_openai_api_error():
     error = sys.exc_info()[0]
@@ -32,7 +24,6 @@ def catch_openai_api_error():
     else:
         print("API error:", error)
 
-
 class ReflexionStrategy(Enum):
     """
     REFLEXION: Apply reflexion to the next reasoning trace 
@@ -42,58 +33,92 @@ class ReflexionStrategy(Enum):
 class Planner:
     def __init__(self,
                  # args,
-                 agent_prompt: PromptTemplate = planner_agent_prompt,
-                 model_name: str = 'gpt-3.5-turbo-1106',
+                 agent_prompt: PromptTemplateFromScratch = planner_agent_prompt,
+                 model_name: str = 'gpt-4o-mini-2024-07-18',
                  ) -> None:
-
+        
+        if "gemini" in model_name.lower():
+            self.model_name = model_name
+            self.parameters = {"temperature":1,"max_completion_tokens":4000}
+        elif ("gpt" in model_name.lower()) or model_name.lower().startswith("o"):
+            self.model_name = model_name
+            self.parameters = {"temperature":1,"max_completion_tokens":4000}
+        else:
+            raise Exception(f"Currently we support Gemini and OpenAI models only.")
+        self.client = openai.OpenAI(
+            # Should be for Gemini or OpenAI. We rely on user to provide correct API - we don't do any checks
+            api_key=os.environ.get("API_KEY"),
+            base_url=os.environ.get("BASE_URL")
+        )
+        self.llm = partial(self._get_completion,model_name=self.model_name,**self.parameters)
         self.agent_prompt = agent_prompt
         self.scratchpad: str = ''
-        self.model_name = model_name
         self.enc = tiktoken.encoding_for_model("gpt-3.5-turbo")
-        self.llm = \
-        ChatOpenAI(
-            model_name=model_name, \
-            temperature=0, \
-            max_tokens=4096, \
-            openai_api_key=OPENAI_API_KEY
-        )
-        if model_name.lower().startswith("o"):
-            self.llm = \
-            ChatOpenAI(
-                model_name=model_name, \
-                temperature=1, \
-                max_tokens=4096, \
-                openai_api_key=OPENAI_API_KEY
-            )
 
         print(f"PlannerAgent {model_name} loaded.")
 
     def run(self, text, query, log_file=None) -> str:
         if log_file:
             log_file.write('\n---------------Planner\n'+self._build_agent_prompt(text, query))
-        # print(self._build_agent_prompt(text, query))
         if len(self.enc.encode(self._build_agent_prompt(text, query))) > 12000:
             return 'Max Token Length Exceeded.'
         else:
-            return self.llm.invoke([HumanMessage(content=self._build_agent_prompt(text, query))]).content
+            result = self.llm(content=self._build_agent_prompt(text, query))
+            if len(result.choices) == 0:
+                raise Exception("result has no response")
+            if len(result.choices) > 1:
+                raise Exception("result has multiple responses. Let's check it")
+            return result.choices[0].message.content
 
     def _build_agent_prompt(self, text, query) -> str:
-        return self.agent_prompt.format(
-            text=text,
-            query=query)
-
+        return self.agent_prompt(
+            text = text,
+            query = query
+        )
+    
+    def _get_completion(self,model_name,content,**params):
+        completion = self.client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {
+                    "role": "user",
+                    "content": content,
+                },
+            ],
+            **params
+        )
+        return completion
 
 class ReactPlanner:
     """
     A question answering ReAct Agent.
     """
     def __init__(self,
-                 agent_prompt: PromptTemplate = react_planner_agent_prompt,
+                 agent_prompt: PromptTemplateFromScratch = react_planner_agent_prompt,
                  model_name: str = 'gpt-3.5-turbo-1106',
                  ) -> None:
         
+        if "gemini" in model_name.lower():
+            self.model_name = model_name
+            self.parameters = {"temperature":1,"max_completion_tokens":4000,"stop":["Action","Thought","Observation"]}
+        elif ("gpt" in model_name.lower()) or model_name.lower().startswith("o"):
+            self.model_name = model_name
+            self.parameters = {"temperature":1,"max_completion_tokens":4000,"stop":["Action","Thought","Observation"]}
+        else:
+            raise Exception(f"Currently we support Gemini and OpenAI models only.")
+        self.client = openai.OpenAI(
+            # Should be for Gemini or OpenAI. We rely on user to provide correct API - we don't do any checks
+            api_key=os.environ.get("API_KEY"),
+            base_url=os.environ.get("BASE_URL")
+        )
+
         self.agent_prompt = agent_prompt
-        self.react_llm = ChatOpenAI(model_name=model_name, temperature=0, max_tokens=1024, openai_api_key=OPENAI_API_KEY,model_kwargs={"stop": ["Action","Thought","Observation"]})
+        self.react_llm = \
+        partial(
+            self._get_completion,
+            model_name=self.model_name,
+            **self.parameters
+        )
         self.env = ReactEnv()
         self.query = None
         self.max_steps = 30
@@ -101,6 +126,19 @@ class ReactPlanner:
         self.finished = False
         self.answer = ''
         self.enc = tiktoken.encoding_for_model("gpt-3.5-turbo")
+    
+    def _get_completion(self,model_name,content,**params):
+        completion = self.client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {
+                    "role": "user",
+                    "content": content,
+                },
+            ],
+            **params
+        )
+        return completion
 
     def run(self, text, query, reset = True) -> None:
 
@@ -161,7 +199,7 @@ class ReactPlanner:
     def prompt_agent(self) -> str:
         while True:
             try:
-                return format_step(self.react_llm.invoke([HumanMessage(content=self._build_agent_prompt())]).content)
+                return format_step(self.react_llm(content=self._build_agent_prompt()).choices[0].message.content)
             except:
                 catch_openai_api_error()
                 print(self._build_agent_prompt())
@@ -169,17 +207,20 @@ class ReactPlanner:
                 time.sleep(5)
     
     def _build_agent_prompt(self) -> str:
-        return self.agent_prompt.format(
-                            query = self.query,
-                            text = self.text,
-                            scratchpad = self.scratchpad)
+        return self.agent_prompt(
+            query = self.query,
+            text = self.text,
+            scratchpad = self.scratchpad
+        )
     
     def is_finished(self) -> bool:
         return self.finished
 
     def is_halted(self) -> bool:
+        agent_prompt = self._build_agent_prompt()
+        print(agent_prompt)
         return ((self.curr_step > self.max_steps) or (
-                    len(self.enc.encode(self._build_agent_prompt())) > 14000)) and not self.finished
+                    len(self.enc.encode(agent_prompt)) > 14000)) and not self.finished
 
     def reset(self) -> None:
         self.scratchpad = ''
@@ -187,22 +228,45 @@ class ReactPlanner:
         self.curr_step = 1
         self.finished = False
 
-
 class ReactReflectPlanner:
     """
     A question answering Self-Reflecting React Agent.
     """
     def __init__(
             self,
-            agent_prompt: PromptTemplate = react_reflect_planner_agent_prompt,
-            reflect_prompt: PromptTemplate = reflect_prompt,
+            agent_prompt: PromptTemplateFromScratch = react_reflect_planner_agent_prompt,
+            reflect_prompt: PromptTemplateFromScratch = reflect_prompt,
             model_name: str = 'gpt-3.5-turbo-1106',
     ) -> None:
         
+        if "gemini" in model_name.lower():
+            self.model_name = model_name
+            self.parameters = {"temperature":1,"max_completion_tokens":4000,"stop":["Action","Thought","Observation"]}
+        elif ("gpt" in model_name.lower()) or model_name.lower().startswith("o"):
+            self.model_name = model_name
+            self.parameters = {"temperature":1,"max_completion_tokens":4000,"stop":["Action","Thought","Observation"]}
+        else:
+            raise Exception(f"Currently we support Gemini and OpenAI models only.")
+        self.client = openai.OpenAI(
+            # Should be for Gemini or OpenAI. We rely on user to provide correct API - we don't do any checks
+            api_key=os.environ.get("API_KEY"),
+            base_url=os.environ.get("BASE_URL")
+        )
+
         self.agent_prompt = agent_prompt
         self.reflect_prompt = reflect_prompt
-        self.react_llm = ChatOpenAI(model_name=model_name, temperature=0, max_tokens=1024, openai_api_key=OPENAI_API_KEY,model_kwargs={"stop": ["Action","Thought","Observation,'\n"]})
-        self.reflect_llm = ChatOpenAI(model_name=model_name, temperature=0, max_tokens=1024, openai_api_key=OPENAI_API_KEY,model_kwargs={"stop": ["Action","Thought","Observation,'\n"]})
+        self.react_llm = \
+        partial(
+            self._get_completion,
+            model_name=self.model_name,
+            **self.parameters
+        )
+        self.reflect_llm = \
+        partial(
+            self._get_completion,
+            model_name=self.model_name,
+            **self.parameters
+        )
         self.model_name = model_name
         self.env = ReactReflectEnv()
         self.query = None
@@ -213,6 +277,19 @@ class ReactReflectPlanner:
         self.reflections: List[str] = []
         self.reflections_str: str = ''
         self.enc = tiktoken.encoding_for_model("gpt-3.5-turbo")
+    
+    def _get_completion(self,model_name,content,**params):
+        completion = self.client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {
+                    "role": "user",
+                    "content": content,
+                },
+            ],
+            **params
+        )
+        return completion
 
     def run(self, text, query, reset = True) -> None:
 
@@ -285,7 +362,7 @@ class ReactReflectPlanner:
     def prompt_agent(self) -> str:
         while True:
             try:
-                return format_step(self.react_llm.invoke([HumanMessage(content=self._build_agent_prompt())]).content)
+                return format_step(self.react_llm(content=self._build_agent_prompt()).choices[0].message.content)
             except:
                 catch_openai_api_error()
                 print(self._build_agent_prompt())
@@ -295,7 +372,7 @@ class ReactReflectPlanner:
     def prompt_reflection(self) -> str:
         while True:
             try:
-                return format_step(self.reflect_llm.invoke([HumanMessage(content=self._build_reflection_prompt())]).content)
+                return format_step(self.reflect_llm(content=self._build_reflection_prompt()).choices[0].message.content)
             except:
                 catch_openai_api_error()
                 print(self._build_reflection_prompt())
@@ -303,17 +380,19 @@ class ReactReflectPlanner:
                 time.sleep(5)
     
     def _build_agent_prompt(self) -> str:
-        return self.agent_prompt.format(
-                            query = self.query,
-                            text = self.text,
-                            scratchpad = self.scratchpad,
-                            reflections = self.reflections_str)
+        return self.agent_prompt(
+            query = self.query,
+            text = self.text,
+            scratchpad = self.scratchpad,
+            reflections = self.reflections_str
+        )
     
     def _build_reflection_prompt(self) -> str:
-        return self.reflect_prompt.format(
-                            query = self.query,
-                            text = self.text,
-                            scratchpad = self.scratchpad)
+        return self.reflect_prompt(
+            query = self.query,
+            text = self.text,
+            scratchpad = self.scratchpad
+        )
     
     def is_finished(self) -> bool:
         return self.finished
@@ -355,6 +434,3 @@ def format_reflections(reflections: List[str],
         return ''
     else:
         return header + 'Reflections:\n- ' + '\n- '.join([r.strip() for r in reflections])
-
-# if __name__ == '__main__':
-    
